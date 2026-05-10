@@ -1,0 +1,287 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c   (APPLICATION - NUCLEO_Blink project)
+  * @brief          : OTA-capable application for STM32L476RG
+  *
+  *  FW1: set BLINK_RATE_MS to 2000  -> slow blink
+  *  FW2: set BLINK_RATE_MS to 500   -> fast blink
+  *
+  *  Runs from app slot 0x08008000 (linker script must match!)
+  *
+  *  Phase 1 test: press USER button (blue, PC13) to mark the image in
+  *  the download slot as "update pending" and reboot. The bootloader
+  *  then copies download slot -> app slot.
+  *
+  *  Phase 2: set USE_WIFI to 1 and the app downloads firmware itself.
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "usart.h"
+#include "gpio.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "string.h"
+#include "stdio.h"
+/* USER CODE END Includes */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+/* ======== CHANGE THIS BETWEEN FW1 AND FW2 ======== */
+#define BLINK_RATE_MS   2000      /* FW1 = 2000, FW2 = 500 */
+/* ================================================== */
+
+#define USE_WIFI        0         /* 0 for Phase-1 boot test, 1 later */
+
+#define APP_ADDR        0x08008000UL
+#define DL_ADDR         0x08080000UL
+#define FLAG_ADDR       0x080FF800UL
+#define PAGE_SIZE       2048UL
+#define UPDATE_MAGIC    0xDEADBEEF12345678ULL
+
+/* Phase-1: we don't know the staged image's exact size, so copy a
+ * generous fixed amount. Small blink firmwares are well under this. */
+#define PHASE1_COPY_SIZE  (64UL * 1024UL)
+/* USER CODE END PD */
+
+/* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN PV */
+char rx_buf[512];
+volatile uint16_t rx_index = 0;
+uint8_t rx_byte;
+/* USER CODE END PV */
+
+void SystemClock_Config(void);
+/* USER CODE BEGIN PFP */
+void ESP_SendCommand(const char *cmd);
+uint8_t ESP_WaitResponse(const char *expect, uint32_t timeout);
+void Debug_Print(const char *msg);
+HAL_StatusTypeDef Flash_EraseRegion(uint32_t addr, uint32_t size);
+HAL_StatusTypeDef Flash_Write(uint32_t addr, const uint8_t *data, uint32_t len);
+void OTA_MarkUpdatePending(uint32_t image_size);
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+/* ---------------- UART / ESP ---------------- */
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1) {
+        if (rx_index < sizeof(rx_buf) - 1)
+            rx_buf[rx_index++] = rx_byte;
+        HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
+    }
+}
+
+void ESP_SendCommand(const char *cmd)
+{
+    memset(rx_buf, 0, sizeof(rx_buf));
+    rx_index = 0;
+    HAL_UART_Transmit(&huart1, (uint8_t*)cmd, strlen(cmd), 1000);
+}
+
+uint8_t ESP_WaitResponse(const char *expect, uint32_t timeout)
+{
+    uint32_t start = HAL_GetTick();
+    while ((HAL_GetTick() - start) < timeout) {
+        if (strstr(rx_buf, expect))   return 1;
+        if (strstr(rx_buf, "ERROR"))  return 0;
+        HAL_Delay(10);
+    }
+    return 0;
+}
+
+void Debug_Print(const char *msg)
+{
+    HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 1000);
+}
+
+/* ---------------- Flash helpers ---------------- */
+
+HAL_StatusTypeDef Flash_EraseRegion(uint32_t addr, uint32_t size)
+{
+    FLASH_EraseInitTypeDef e = {0};
+    uint32_t page_err;
+    HAL_StatusTypeDef st = HAL_OK;
+    uint32_t cur = addr;
+    uint32_t end = addr + size;
+
+    HAL_FLASH_Unlock();
+    while (cur < end) {
+        if (cur < 0x08080000UL) {
+            e.Banks = FLASH_BANK_1;
+            e.Page  = (cur - 0x08000000UL) / PAGE_SIZE;
+        } else {
+            e.Banks = FLASH_BANK_2;
+            e.Page  = (cur - 0x08080000UL) / PAGE_SIZE;
+        }
+        e.TypeErase = FLASH_TYPEERASE_PAGES;
+        e.NbPages   = 1;
+        st = HAL_FLASHEx_Erase(&e, &page_err);
+        if (st != HAL_OK) break;
+        cur += PAGE_SIZE;
+    }
+    HAL_FLASH_Lock();
+    return st;
+}
+
+/* Write arbitrary bytes (len rounded up to 8 internally) */
+HAL_StatusTypeDef Flash_Write(uint32_t addr, const uint8_t *data, uint32_t len)
+{
+    HAL_StatusTypeDef st = HAL_OK;
+    uint64_t dword;
+
+    HAL_FLASH_Unlock();
+    for (uint32_t off = 0; off < len; off += 8) {
+        memset(&dword, 0xFF, 8);
+        uint32_t chunk = (len - off >= 8) ? 8 : (len - off);
+        memcpy(&dword, data + off, chunk);
+        st = HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, addr + off, dword);
+        if (st != HAL_OK) break;
+    }
+    HAL_FLASH_Lock();
+    return st;
+}
+
+/* Write the "update pending" flag and reboot into the bootloader */
+void OTA_MarkUpdatePending(uint32_t image_size)
+{
+    uint64_t flag[2];
+    flag[0] = UPDATE_MAGIC;
+    flag[1] = image_size;
+
+    Flash_EraseRegion(FLAG_ADDR, PAGE_SIZE);
+    Flash_Write(FLAG_ADDR, (uint8_t*)flag, sizeof(flag));
+
+    Debug_Print("Update flag set - rebooting into bootloader...\r\n");
+    HAL_Delay(100);
+    NVIC_SystemReset();
+}
+
+/* USER CODE END 0 */
+
+int main(void)
+{
+  /* USER CODE BEGIN 1 */
+  /* Vector table lives in the app slot, not at flash start */
+  SCB->VTOR = APP_ADDR;
+  /* USER CODE END 1 */
+
+  HAL_Init();
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+  /* USER CODE END SysInit */
+
+  MX_GPIO_Init();
+  MX_USART1_UART_Init();
+  MX_USART2_UART_Init();
+
+  /* USER CODE BEGIN 2 */
+  HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
+
+  Debug_Print("\r\n=== APP running from 0x08008000 ===\r\n");
+#if BLINK_RATE_MS == 2000
+  Debug_Print("This is FW1 (slow blink, 2000 ms)\r\n");
+#else
+  Debug_Print("This is FW2 (fast blink, 500 ms)\r\n");
+#endif
+
+#if USE_WIFI
+  HAL_Delay(5000);
+  ESP_SendCommand("AT\r\n");
+  if (ESP_WaitResponse("OK", 2000))
+      Debug_Print("AT OK!\r\n");
+
+  ESP_SendCommand("AT+CWMODE=1\r\n");
+  ESP_WaitResponse("OK", 2000);
+
+  Debug_Print("Connecting to WING...\r\n");
+  ESP_SendCommand("AT+CWJAP=\"WING\",\"asdfghjk\"\r\n");
+  if (ESP_WaitResponse("OK", 20000))
+      Debug_Print(">>> WIFI CONNECTED <<<\r\n");
+  else
+      Debug_Print(">>> WIFI FAILED <<<\r\n");
+#endif
+  /* USER CODE END 2 */
+
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+      /* The blink that identifies which firmware is running */
+      HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+      HAL_Delay(BLINK_RATE_MS);
+
+      /* USER button (blue, PC13, active LOW) triggers the update path:
+       * marks whatever is in the download slot as pending and reboots */
+      if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET) {
+          Debug_Print("Button pressed - marking update pending\r\n");
+          OTA_MarkUpdatePending(PHASE1_COPY_SIZE);
+          /* never returns - device resets */
+      }
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+  }
+  /* USER CODE END 3 */
+}
+
+/**
+  * @brief System Clock Configuration
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  if (HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = 1;
+  RCC_OscInitStruct.PLL.PLLN = 10;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV7;
+  RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
+  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+void Error_Handler(void)
+{
+  __disable_irq();
+  while (1)
+  {
+  }
+}
+#ifdef USE_FULL_ASSERT
+void assert_failed(uint8_t *file, uint32_t line)
+{
+}
+#endif
