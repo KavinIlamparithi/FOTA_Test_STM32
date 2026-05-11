@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir /s /b)",
+      "Bash(cd /d && ls -la)",
+      "Read(//d/d/**)",
+      "Bash(ls -la \"/d/RESULT/FW2_Blink\")",
+      "Read(//d/RESULT/FW2_Blink/**)"
+    ]
+  }
+}
