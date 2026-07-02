@@ -62,7 +62,7 @@ The STM32L476RG internal flash memory layout is partitioned as follows:
 *   **[`BOOT_L476`](BOOT_L476/)** - Dual-bank select execution logic bootloader.
 *   **[`D1-Mini_FW`](D1-Mini_FW/)** - ESP8266 AT firmware and flashing guide.
 *   **[`FW1_blink`](FW1_blink/)** - Baseline application image (v1.0.0, Slow blink: 2000ms).
-*   **[`FW2_Blink`](FW2_Blink/)** - Updated low-power optimized application image (v1.0.1, Medium blink: 500ms).
+*   **[`FW2_Blink`](FW2_Blink/)** - Updated low-power optimized application image (v2.0.0, Medium blink: 500ms).
 *   **[`FW3_blink`](FW3_blink/)** - Staging update application image (v3.0.0, Fast blink: 200ms).
 *   **[`OTA_SERVER`](OTA_SERVER/)** - Python HTTP server script for hosting firmware binaries.
 
@@ -78,12 +78,12 @@ The STM32L476RG internal flash memory layout is partitioned as follows:
 
 Connect the D1 Mini pins to the STM32 board according to the table below:
 
-| D1 Mini (CH340G) Pin | NUCLEO-L476RG Pin | Description |
-| :--- | :--- | :--- |
-| **TX** | **D2 (CN9)** | Transmit to STM32 UART |
-| **RX** | **D8 (CN5)** | Receive from STM32 UART |
-| **G** | **GND (CN6)** | Ground |
-| **5V** | **5V (CN6)** | Power |
+| D1 Mini (CH340G) Pin | NUCLEO-L476RG Pin  | Description            |
+| :---                 | :---               | :---                   |
+| **TX**               | **D2 (CN9)**       | Transmit to STM32 UART |
+| **RX**               | **D8 (CN5)**       | Receive from STM32 UART|
+| **G**                | **GND (CN6)**      | Ground                 |
+| **5V**               | **5V (CN6)**       | Power                  |
 
 > [!IMPORTANT]
 > Disconnect the hardware connections between the D1 Mini and the STM32 board **before** flashing the firmware to the D1 Mini. Only connect the USB cable to the D1 Mini during flashing.
@@ -91,8 +91,7 @@ Connect the D1 Mini pins to the STM32 board according to the table below:
 ---
 
 ## 2. Steps to Execute OTA
-
-1. Connect the **NUCLEO-L476RG** to your PC using a mini-USB cable.
+ 1. Connect the **NUCLEO-L476RG** to your PC using a mini-USB cable.
 2. Erase the entire chip using **STM32CubeProgrammer**.
 3. Flash the **Bootloader** (`BOOT_L476`) ELF or binary file to the NUCLEO-L476RG.
    * *Verify:* The green LED (LD2) on the board should blink rapidly, denoting that there is no firmware in either flash slot.
