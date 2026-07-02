@@ -22,9 +22,9 @@ The diagram below details the data flow between the central firmware server, the
   |        (D1 Mini NodeMCU)         |
   +-----------------+----------------+
                     |
-                    | UART (115200 Baud)
-                    | PA9 (TX)  --> RX
-                    | PA10 (RX) <-- TX
+                    | UART      (115200 Baud)
+                    | CN5(D8)   (TX)      -->   RX
+                    | CN9(D2)   (RX)     <--    TX
                     v
   +-----------------+----------------+
   |     STM32L476RG Microcontroller  |
